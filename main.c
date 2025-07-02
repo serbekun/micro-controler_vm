@@ -244,7 +244,7 @@ void list_files(Microcontroller *mc) {
 }
 
 int change_directory(Microcontroller *mc, const char *dirname) {
-    if (strcmp(dirname, "..") == 0) {
+    if (!strcmp(dirname, "..")) {
         if (mc->dir_stack_ptr > 0) {
             mc->dir_stack_ptr--;
             return 0;
@@ -698,7 +698,7 @@ void process_command(Microcontroller *mc, const char *cmd) {
     
     if (args < 1) return;
     
-    if (strcmp(command, "ls") == 0) {
+    if (!strcmp(command, "ls") || !strcmp(command, "dir")) {
         list_files(mc);
     }
     else if (strcmp(command, "mkdir") == 0 && args >= 2) {
@@ -708,7 +708,7 @@ void process_command(Microcontroller *mc, const char *cmd) {
             printf("Error creating directory\n");
         }
     }
-    else if (strcmp(command, "cd") == 0 && args >= 2) {
+    else if (strcmp(command, "cd") == 0 && args >= 2 || !strcmp(command, "touch")) {
         if (change_directory(mc, arg1) == 0) {
             printf("Directory changed\n");
         } else {
@@ -795,30 +795,30 @@ void process_command(Microcontroller *mc, const char *cmd) {
         }
     }
     else if (strcmp(command, "mem") == 0) {
-        uint32_t free_ptr = *((uint32_t *)(mc->memory + METADATA_START));
-        uint32_t metadata_size = DATA_START + MAX_FILES * sizeof(FileMetadata);
-        uint32_t stack_usage = 0;
-        
-        // Calculate active stack usage
-        for (int i = 0; i < MAX_TASKS; i++) {
-            if (mc->tasks[i].active) {
-                stack_usage += mc->tasks[i].stack_size;
-            }
+    uint32_t free_ptr = *((uint32_t *)(mc->memory + METADATA_START));
+    uint32_t metadata_size = DATA_START + MAX_FILES * sizeof(FileMetadata);
+    uint32_t stack_usage = 0;
+    
+    // Calculate active stack usage
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (mc->tasks[i].active) {
+            stack_usage += mc->tasks[i].stack_size;
         }
-        
-        uint32_t total_used = free_ptr;
-        uint32_t file_usage = mc->total_file_bytes;
-        uint32_t free_space = mc->size - free_ptr;
-        
-        printf("\nMemory Information:\n");
-        printf("  Total memory:      %lu bytes\n", mc->size);
-        printf("  Metadata area:     %u bytes\n", metadata_size);
-        printf("  File data usage:   %u bytes\n", file_usage);
-        printf("  Stack usage:       %u bytes\n", stack_usage);
-        printf("  Total used:        %u bytes\n", total_used);
-        printf("  Free space:        %u bytes\n", free_space);
-        printf("  Utilization:       %.1f%%\n\n", 
-               (total_used * 100.0) / mc->size);
+    }
+    
+    uint32_t active_used = metadata_size + mc->total_file_bytes + stack_usage;
+    uint32_t free_space = mc->size - free_ptr;
+    
+    printf("\nMemory Information:\n");
+    printf("  Total memory:      %lu bytes\n", mc->size);
+    printf("  Metadata area:     %u bytes\n", metadata_size);
+    printf("  Active file data:  %u bytes\n", mc->total_file_bytes);
+    printf("  Active stacks:     %u bytes\n", stack_usage);
+    printf("  Total active:      %u bytes\n", active_used);
+    printf("  Allocated (high):  %u bytes\n", free_ptr);
+    printf("  Free space:        %u bytes\n", free_space);
+    printf("  Utilization:       %.1f%%\n\n", 
+           (active_used * 100.0) / mc->size);
     }
     else if (strcmp(command, "man") == 0 && args >= 2) {
         show_manual(arg1);
