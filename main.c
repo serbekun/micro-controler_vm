@@ -7,15 +7,15 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define MEMORY_SIZE (4 * 1024) // 4 kilobytes of memory
 #define METADATA_START 0
+#define DEFAULT_MEMORY_SIZE (2 * 1024 * 1024)
 #define DATA_START (sizeof(uint32_t))
 #define MAX_FILES 32              
 #define MAX_TASKS 8
 #define STACK_SIZE 1024
 #define MAX_DIR_DEPTH 8
 #define MAX_OPEN_FILES 32
-#define MAX_FILENAME_LEN 31
+#define MAX_FILENAME_LEN 32
 #define MAX_PATH_LEN 255
 
 // CPU registers
@@ -68,7 +68,7 @@ typedef struct {
 } Microcontroller;
 
 // Function prototypes
-void init_cpu(CPUState *cpu);
+void init_cpu(CPUState *cpu, int memory_size);
 int execute_instruction(Microcontroller *mc);
 void handle_syscall(Microcontroller *mc);
 
@@ -89,7 +89,7 @@ Microcontroller *create_microcontroller(size_t mem_size) {
     mc->total_file_bytes = 0;
 
     // Initialize CPU
-    init_cpu(&mc->cpu);
+    init_cpu(&mc->cpu, mem_size);
     
     // Initialize filesystem
     uint32_t metadata_area_size = MAX_FILES * sizeof(FileMetadata);
@@ -116,8 +116,177 @@ void destroy_microcontroller(Microcontroller *mc) {
     }
 }
 
-void realoc_microcontroller_memory(Microcontroller *mc) {
+void microcontroller_memory_manager_realloc_show_menu(long memory_size) {
     
+    printf("now mem size %lu", memory_size);
+    printf("====================================\n");
+    printf("|  Microcontroller Memory Realloc |\n");
+    printf("====================================\n");
+    printf("| set       - set new memory size  |\n");
+    printf("| add       - add to exist memory  |\n");
+    printf("| help      - show this menu       |\n");
+    printf("| exit      - exit from realloc    |\n");
+    printf("====================================\n");
+    
+}
+
+void microcontroller_memory_manager_realloc_set(Microcontroller *mec) {
+    
+    uint32_t free_ptr = *((uint32_t *)(mec->memory + METADATA_START));
+    uint32_t metadata_size = DATA_START + MAX_FILES * sizeof(FileMetadata);
+    uint32_t stack_usage = 0;
+    
+    // Calculate stack usage
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (mec->tasks[i].active) {
+            stack_usage += mec->tasks[i].stack_size;
+        }
+    }
+    
+    uint32_t active_used = metadata_size + mec->total_file_bytes + stack_usage;
+    uint32_t free_space = mec->size - free_ptr;
+
+    int input_size = 1024;
+    char input[input_size];
+
+    printf("type exit for cancel operation\n");
+    printf("min of bytes you can realloc %d\n", active_used);
+    printf("mcuOS/MCMM/realloc/set> ");
+    fgets(input, input_size, stdin);
+    input[strcspn(input, "\n")] = '\0';
+
+    if (!strcmp(input, "exit")) {
+        return;
+    }
+
+    long new_memory_size = atoi(input);
+    
+    uint32_t *new_memory = (uint32_t*)realloc(mec->memory, sizeof(uint32_t) * new_memory_size);
+    if (!new_memory) {
+        return;
+    }
+    mec->memory = (uint8_t*)new_memory; 
+    mec->size = new_memory_size;
+}
+
+void microcontroller_memory_manager_realloc_add(Microcontroller *mcu) {
+    
+    int input_size = 1024;
+    char input[input_size];
+
+    printf("type exit for cancel operation\n");
+    printf("type how many memory you want to add\n");
+    printf("mcuOS/MCMM/realloc/set> ");
+    fgets(input, input_size, stdin);
+    input[strcspn(input, "\n")] = '\0';
+
+    if (!strcmp(input, "exit")) {
+        return;
+    }
+
+    long add_memory_size = atoi(input);
+    
+    size_t new_memory_size = mcu->size + add_memory_size;
+    uint32_t *new_memory = (uint32_t*)realloc(mcu->memory, sizeof(uint32_t) * new_memory_size);
+    if (!new_memory) {
+        return;
+    }
+    mcu->memory = (uint8_t*)new_memory;
+    mcu->size = new_memory_size;
+}
+
+void microcontroller_memory_manager_realloc_menu(Microcontroller *mec ,long memory_size) {
+    
+    char input[128];
+    
+    microcontroller_memory_manager_realloc_show_menu(memory_size);
+
+    while (1) {
+    
+    printf("mcuOS/MCMM/realloc> ");
+    
+    if (!fgets(input, sizeof(input), stdin)) break;
+    input[strcspn(input, "\n")] = '\0';
+    
+    if (!strcmp(input, "exit")) {
+        return;
+    }
+    else if (!strcmp(input, "set")) {
+        microcontroller_memory_manager_realloc_set(mec);
+    }
+    else if (!strcmp(input, "add")) {
+        microcontroller_memory_manager_realloc_add(mec);
+    }
+    }
+}
+
+void microcontroller_memory_manager_show_main_menu () {
+    
+    printf("====================================\n");
+    printf("|  Microcontroller Memory Manager |\n");
+    printf("===================================|\n");
+    printf("| info      - show memory info     |\n");
+    printf("| realloc   - realloc memory       |\n");
+    printf("| help      - show help menu       |\n");
+    printf("| exit      - exit from manager    |\n");
+    printf("====================================\n");
+
+}
+
+void microcontroller_memory_manager_info_menu (Microcontroller *mc) {
+    uint32_t free_ptr = *((uint32_t *)(mc->memory + METADATA_START));
+    uint32_t metadata_size = DATA_START + MAX_FILES * sizeof(FileMetadata);
+    uint32_t stack_usage = 0;
+    
+    // Calculate stack usage
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (mc->tasks[i].active) {
+            stack_usage += mc->tasks[i].stack_size;
+        }
+    }
+    
+    uint32_t active_used = metadata_size + mc->total_file_bytes + stack_usage;
+    uint32_t free_space = mc->size - free_ptr;
+    
+    printf("\nMemory information:\n");
+    printf("  Total memory:      %lu bytes\n", mc->size);
+    printf("  Metadata:          %u bytes\n", metadata_size);
+    printf("  File data:         %u bytes\n", mc->total_file_bytes);
+    printf("  Task stacks:       %u bytes\n", stack_usage);
+    printf("  Total used:        %u bytes\n", active_used);
+    printf("  Allocated:         %u bytes\n", free_ptr);
+    printf("  Free:              %u bytes\n", free_space);
+    printf("  Usage:             %.1f%%\n\n", 
+           (active_used * 100.0) / mc->size);
+
+}
+
+void microcontroller_memory_manager(Microcontroller *mc, long memory_size) {
+    
+    char input[256];
+    
+    microcontroller_memory_manager_show_main_menu();
+    
+    while (1) {
+        
+    printf("mcuOS/MCMM>");
+    if (!fgets(input, sizeof(input), stdin)) break;
+    input[strcspn(input, "\n")] = '\0';
+    
+    if (!strcmp(input, "help")) {
+        microcontroller_memory_manager_show_main_menu();
+    }
+    else if (!strcmp(input, "exit")) {
+        return;
+    }
+    else if (!strcmp(input, "info")) {
+        microcontroller_memory_manager_info_menu(mc);
+    }
+    else if (!strcmp(input, "realloc")) {
+        microcontroller_memory_manager_realloc_menu(mc, memory_size);
+    }
+    
+    }
 }
 
 // Write byte to memory
@@ -334,7 +503,7 @@ int write_bits_to_file(Microcontroller *mc, const char *filename, uint32_t bit_o
 }
 
 // Create task
-int create_task(Microcontroller *mc, const char *filename, uint8_t priority) {
+int create_task(Microcontroller *mc, const char *filename, uint8_t priority, int memory_size) {
     FileMetadata *meta = find_file(mc, filename);
     if (!meta || meta->is_dir) return -1;
     
@@ -357,7 +526,7 @@ int create_task(Microcontroller *mc, const char *filename, uint8_t priority) {
             *((uint32_t *)(mc->memory + METADATA_START)) = free_ptr + STACK_SIZE;
             
             // Initialize CPU state
-            init_cpu(&task->cpu);
+            init_cpu(&task->cpu, memory_size);
             task->cpu.pc = meta->start;
             task->cpu.sp = free_ptr + STACK_SIZE - 4;
             
@@ -460,9 +629,9 @@ int load_external_file(Microcontroller *mc, const char *ext_path, const char *in
 // ================================
 
 // Initialize CPU
-void init_cpu(CPUState *cpu) {
+void init_cpu(CPUState *cpu, int memory_size) {
     memset(cpu, 0, sizeof(CPUState));
-    cpu->sp = MEMORY_SIZE - 4;  // Set to top of memory
+    cpu->sp = memory_size - 4;  // Set to top of memory
 }
 
 // Handle system calls
@@ -839,7 +1008,7 @@ void show_manual(const char *cmd) {
 }
 
 // Process command
-void process_command(Microcontroller *mc, const char *cmd_line) {
+void process_command(Microcontroller *mc, const char *cmd_line, int memory_size) {
     char cmd[256];
     strncpy(cmd, cmd_line, sizeof(cmd));
     cmd[sizeof(cmd)-1] = '\0';
@@ -950,7 +1119,7 @@ void process_command(Microcontroller *mc, const char *cmd_line) {
     }
     else if (strcmp(command, "task") == 0 && argc >= 3) {
         uint8_t priority = atoi(arg2);
-        int task_id = create_task(mc, arg1, priority);
+        int task_id = create_task(mc, arg1, priority, memory_size);
         if (task_id >= 0) {
             printf("Task created (ID: %d)\n", task_id);
         } else {
@@ -965,30 +1134,7 @@ void process_command(Microcontroller *mc, const char *cmd_line) {
         }
     }
     else if (strcmp(command, "mem") == 0) {
-        uint32_t free_ptr = *((uint32_t *)(mc->memory + METADATA_START));
-        uint32_t metadata_size = DATA_START + MAX_FILES * sizeof(FileMetadata);
-        uint32_t stack_usage = 0;
-        
-        // Calculate stack usage
-        for (int i = 0; i < MAX_TASKS; i++) {
-            if (mc->tasks[i].active) {
-                stack_usage += mc->tasks[i].stack_size;
-            }
-        }
-        
-        uint32_t active_used = metadata_size + mc->total_file_bytes + stack_usage;
-        uint32_t free_space = mc->size - free_ptr;
-        
-        printf("\nMemory information:\n");
-        printf("  Total memory:      %lu bytes\n", mc->size);
-        printf("  Metadata:          %u bytes\n", metadata_size);
-        printf("  File data:         %u bytes\n", mc->total_file_bytes);
-        printf("  Task stacks:       %u bytes\n", stack_usage);
-        printf("  Total used:        %u bytes\n", active_used);
-        printf("  Allocated:         %u bytes\n", free_ptr);
-        printf("  Free:              %u bytes\n", free_space);
-        printf("  Usage:             %.1f%%\n\n", 
-               (active_used * 100.0) / mc->size);
+        microcontroller_memory_manager(mc, memory_size);
     }
     else if (strcmp(command, "makeprog") == 0) {
         create_sample_program(mc);
@@ -1021,7 +1167,30 @@ void process_command(Microcontroller *mc, const char *cmd_line) {
 }
 
 int main() {
-    Microcontroller *mcu = create_microcontroller(MEMORY_SIZE);
+    
+    long memory_size = 0;
+    
+    char *memory_size_input = (char *)malloc(sizeof(char) * 1024);
+    if (!memory_size_input) {
+        printf("erro allocate memory for input buffer you don't have memory end progrma");
+        return 1;
+    }
+    
+    printf("================================================================\n");
+    printf("| select how many virtual memory you want to Allocate         |\n");
+    printf("| if don't input anything memory be default size 2mg           |\n");
+    printf("| if you want to select memory size type memory size in bytes |\n");
+    printf("================================================================\n");
+    printf("memory_size> ");
+    fgets(memory_size_input, 1024, stdin);
+    memory_size_input[strcspn(memory_size_input, "\n")] = '\0';
+    if (!strcmp(memory_size_input, "")) {
+        memory_size = DEFAULT_MEMORY_SIZE;
+    } else {
+        memory_size = atoi(memory_size_input);
+    }
+    
+    Microcontroller *mcu = create_microcontroller(memory_size);
     char input[256];
     
     printf("Microcontroller operating system initialized\n");
@@ -1035,13 +1204,13 @@ int main() {
     while (1) {
         printf("mcuOS> ");
         if (!fgets(input, sizeof(input), stdin)) break;
-        input[strcspn(input, "\n")] = 0;
+        input[strcspn(input, "\n")] = '\0';
         
-        if (strcmp(input, "run_tasks") == 0) {
+        if (!strcmp(input, "run_tasks")) {
             scheduler(mcu);
             execute_current_task(mcu);
         } else if (strlen(input) > 0) {
-            process_command(mcu, input);
+            process_command(mcu, input, memory_size);
         }
     }
     
