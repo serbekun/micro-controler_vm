@@ -11,12 +11,12 @@
 #define METADATA_START 0
 #define DEFAULT_MEMORY_SIZE (4 * 1024 * 1024)  // 4MB
 #define DATA_START (sizeof(uint32_t))
-#define MAX_FILES 256
-#define MAX_TASKS 16
-#define STACK_SIZE 4096
-#define MAX_DIR_DEPTH 16
-#define MAX_OPEN_FILES 64
-#define MAX_FILENAME_LEN 64
+#define MAX_FILES 32
+#define MAX_TASKS 8
+#define STACK_SIZE 1024
+#define MAX_DIR_DEPTH 8
+#define MAX_OPEN_FILES 32
+#define MAX_FILENAME_LEN 32
 #define MAX_PATH_LEN 512
 #define MAX_ARGV 16
 #define MAX_ENVP 32
