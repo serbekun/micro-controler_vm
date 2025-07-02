@@ -84,7 +84,7 @@ mcuOS> read hello.txt 0 22
 Data from 'hello.txt':
 Hello Microcontroller!
 mcuOS> mem
-
+```
 File Operations
 
     Create: create <filename> <size>
