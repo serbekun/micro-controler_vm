@@ -1,141 +1,144 @@
+markdown
+
 # Microcontroller OS
 
 ## Overview
 
-This project implements a **virtual microcontroller OS** in C that simulates a basic operating system environment with its own:
-- Virtual CPU
-- Simple file system (supporting files and directories)
-- Task management (multitasking support)
-- Instruction set (virtual ISA with custom opcodes)
-- System calls (file I/O, console I/O, etc.)
-- CLI shell interface
+This project implements a **virtual microcontroller OS** in C that simulates a complete embedded system environment with:
 
-It is designed as an educational toy operating system for learning concepts of embedded systems, file systems, and CPU instruction execution.
+- Virtual memory management
+- ELF executable loading and execution
+- Simple hierarchical file system
+- System call interface
+- Snapshot functionality for saving/restoring state
+- Interactive command-line interface
 
----
+## Key Features
 
-## Features
+### 🚀 Core System
+- Custom memory manager with dynamic reallocation
+- ELF binary loader for 32-bit executables
+- System call handler (file I/O, memory info)
+- State snapshots (save/restore complete VM state)
 
-### ✅ Virtual CPU
+### 📁 File System
+- Hierarchical directory structure
+- File metadata tracking (name, size, location)
+- Basic file operations (create, read, write, delete)
+- Special files (stdin, stdout, stderr)
 
-- **Registers**: 16 general-purpose registers (`R0`–`R15`), program counter (`pc`), stack pointer (`sp`), and status register.
-- **Custom instruction set**:
-  - Arithmetic: `MOV`, `ADD`, `SUB`
-  - Memory: `LOAD`, `STORE`, `PUSH`, `POP`
-  - Control flow: `JMP`, `JZ`, `HALT`
-  - System: `SYSCALL`, `DELAY`
-- Stack-based function calling support.
+### 💻 Command Line Interface
+- File management commands (ls, mkdir, cd, create, etc.)
+- Program execution (loadbin, exec)
+- Memory management interface
+- Built-in help system
 
-### ✅ Virtual File System
+## Memory Architecture
 
-- **Files and directories** with metadata stored in simulated memory.
-- Supports creating, writing, reading, and deleting files.
-- Supports creating directories and navigating between them (`cd`, `ls`).
+| Area               | Description                          |
+|--------------------|--------------------------------------|
+| Metadata Start     | Pointer to first free memory address |
+| File Metadata      | Array of FileMetadata structures     |
+| Data Area          | File contents and program segments   |
+| Program Memory     | Loaded ELF segments                  |
 
-### ✅ Task Management
+Default memory size: 4MB (configurable at startup)
 
-- Support for up to 8 tasks (threads) with individual stacks and CPU contexts.
-- Simple round-robin scheduler.
-- Ability to run programs as background tasks with priorities.
+## System Calls
 
-### ✅ System Calls
+| Number | Description                     |
+|--------|---------------------------------|
+| 1      | write (file or console output)  |
+| 3      | read (file or console input)    |
+| 5      | open file                       |
+| 6      | close file                      |
+| 45     | get memory size                 |
 
-Implemented system calls:
-- File operations (read, write, create)
-- Character I/O (print, read from stdin)
-- Exit syscall for tasks
+## CLI Commands
 
-### ✅ CLI Shell
+### File Operations
 
-Built-in interactive shell supporting commands like:
-- `ls` — list files
-- `mkdir` — create directory
-- `cd` — change directory
-- `create` — create file
-- `write` — write string to file
-- `read` — read data from file
-- `rm` — delete file or directory
-- `run` — execute a program in foreground
-- `task` — create a background task
-- `load` — load external file into virtual file system
-- `mem` — show memory usage info
-- `man` — show command manual
-- `exit` — exit shell
+ls - List directory contents
+mkdir <dir> - Create directory
+cd <dir> - Change directory
+create <file> <size> - Create file
+write <file> <offset> <data> - Write to file
+read <file> <offset> <length> - Read from file
+rm <file> - Delete file/directory
+load <ext> <int> - Load external file
+text
 
----
 
-## Memory Layout
+### Program Execution
 
-- **Metadata start**: Tracks next free memory pointer.
-- **File metadata**: Array of `FileMetadata` structures for files/directories.
-- **Data area**: Stores file contents and task stacks.
-- **Stack area**: Dynamically allocated per task (default 1KB each).
+loadbin <file> - Load ELF executable
+exec - Execute loaded program
+syscall <n> <a1> <a2> <a3> - Test system call
+text
 
----
 
-## Example Usage
+### System Management
+
+mem - Memory management interface
+snapshot <file> - Save VM state
+restore <file> - Restore VM state
+clear - Clear screen
+help - Show command list
+man <cmd> - Show command help
+exit - Exit system
+text
+
+
+## Building and Running
 
 ```bash
+gcc -o mcu_os main.c
+./mcu_os
+```
+
+The system will prompt for initial memory allocation (press Enter for default 4MB).
+Example Session
+bash
+
 mcuOS> mkdir test
 mcuOS> cd test
 mcuOS> create hello.txt 32
-mcuOS> write hello.txt 0 "Hello Microcontroller!"
-mcuOS> read hello.txt 0 22
-Data from 'hello.txt':
-Hello Microcontroller!
-mcuOS> mem
-```
-File Operations
+mcuOS> write hello.txt 0 "Hello World!"
+mcuOS> read hello.txt 0 12
+Hello World!
+mcuOS> loadbin program.elf
+mcuOS> exec
+Program output...
+mcuOS> snapshot backup.mvms
 
-    Create: create <filename> <size>
+Future Enhancements
 
-    Write: write <filename> <offset> <data>
+    Add process management
 
-    Read: read <filename> <offset> <length>
+    Implement more system calls
 
-    Delete: rm <filename>
+    Add support for dynamic linking
 
-    List: ls
+    Improve error handling
 
-    Navigate: cd <dirname>
-
-Task System
-
-    Create a task: task <filename> <priority>
-
-    Scheduler: run_tasks (executes next ready task)
-
-System Calls
-Number	Description
-0	Exit
-2	Read file
-3	Write file
-4	Create file
-0x10	Print character
-0x11	Read character
-Build & Run
-
-gcc -o mcu_os main.c
-./mcu_os
-
-Future Ideas
-
-    Add a simulated interrupt system
-
-    Implement more syscalls (network, timers)
-
-    Add support for binary executable loading
-
-    Improve instruction set
+    Add networking support
 
 License
 
-MIT License. Free for educational and research use.
-Author
+MIT License
 
-[Mishchenko Sergey]
-📄 Related Files
+Author: [Mishchenko Sergey]
+text
 
-    main.c — main implementation file.
 
-    README.md — this documentation.
+Key improvements from the previous version:
+1. Better organization of features
+2. Updated system call table
+3. Added new commands (snapshot/restore)
+4. More detailed memory architecture description
+5. Cleaner formatting and structure
+6. Added example session
+7. Removed outdated features no longer in the code
+
+The README now accurately reflects the current capabilities shown in your code, particularly the ELF loading and memory management features.
+
