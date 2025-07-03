@@ -3,103 +3,15 @@
 #include <stdint.h>
 #include <string.h>
 #include <ctype.h>
-#include <dirent.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <math.h>
+#include <elf.h>
 
 #define METADATA_START 0
 #define DEFAULT_MEMORY_SIZE (4 * 1024 * 1024)  // 4MB
 #define DATA_START (sizeof(uint32_t))
 #define MAX_FILES 32
-#define MAX_TASKS 8
-#define STACK_SIZE 1024
 #define MAX_DIR_DEPTH 8
-#define MAX_OPEN_FILES 32
 #define MAX_FILENAME_LEN 32
 #define MAX_PATH_LEN 512
-#define MAX_ARGV 16
-#define MAX_ENVP 32
-
-// ELF Definitions
-typedef uint32_t Elf32_Addr;
-typedef uint16_t Elf32_Half;
-typedef uint32_t Elf32_Off;
-typedef uint32_t Elf32_Word;
-
-#define EI_NIDENT 16
-#define EI_MAG0 0
-#define ELFMAG0 0x7F
-#define EI_MAG1 1
-#define ELFMAG1 'E'
-#define EI_MAG2 2
-#define ELFMAG2 'L'
-#define EI_MAG3 3
-#define ELFMAG3 'F'
-#define PT_LOAD 1
-#define EI_CLASS 4
-#define ELFCLASS32 1
-#define EI_DATA 5
-#define ELFDATA2LSB 1
-#define ET_EXEC 2
-#define EM_CUSTOM 0xFE01  // Наш кастомный тип CPU
-
-typedef struct {
-    unsigned char e_ident[EI_NIDENT];
-    Elf32_Half    e_type;
-    Elf32_Half    e_machine;
-    Elf32_Word    e_version;
-    Elf32_Addr    e_entry;
-    Elf32_Off     e_phoff;
-    Elf32_Off     e_shoff;
-    Elf32_Word    e_flags;
-    Elf32_Half    e_ehsize;
-    Elf32_Half    e_phentsize;
-    Elf32_Half    e_phnum;
-    Elf32_Half    e_shentsize;
-    Elf32_Half    e_shnum;
-    Elf32_Half    e_shstrndx;
-} Elf32_Ehdr;
-
-typedef struct {
-    Elf32_Word  p_type;
-    Elf32_Off   p_offset;
-    Elf32_Addr  p_vaddr;
-    Elf32_Addr  p_paddr;
-    Elf32_Word  p_filesz;
-    Elf32_Word  p_memsz;
-    Elf32_Word  p_flags;
-    Elf32_Word  p_align;
-} Elf32_Phdr;
-
-// CPU registers
-typedef struct {
-    uint32_t pc;       // Program counter
-    uint32_t sp;       // Stack pointer
-    uint32_t regs[16]; // General purpose registers R0-R15
-    uint32_t status;   // Status register
-    uint32_t argc;     // Argument count
-    uint32_t argv;     // Argument vector
-    uint32_t envp;     // Environment variables
-} CPUState;
-
-// Task structure
-typedef struct {
-    CPUState cpu;
-    uint32_t stack_start;
-    uint32_t stack_size;
-    uint8_t active;
-    uint8_t priority;
-    uint32_t pid;      // Process ID
-    uint32_t ppid;     // Parent PID
-} Task;
-
-// Process table entry
-typedef struct {
-    uint32_t pid;
-    uint32_t status;
-    Task *task;
-} Process;
 
 // File metadata
 typedef struct {
@@ -109,49 +21,41 @@ typedef struct {
     uint8_t used;      // Usage flag
     uint8_t is_dir;    // Directory flag
     uint32_t parent;   // Parent directory ID
-    uint8_t executable; // Executable flag
 } FileMetadata;
 
-// System call
 typedef struct {
-    uint32_t syscall_num;
-    uint32_t arg1;
-    uint32_t arg2;
-    uint32_t arg3;
-    uint32_t arg4;     // Additional argument
-    uint32_t return_value;
-} Syscall;
+    uint32_t entry_point;   
+    uint32_t phdr_offset;   
+    uint16_t phnum;         
+    uint8_t is_loaded;      
+} ExecContext;
 
 typedef struct {
-    uint8_t *memory;   // Main memory
-    size_t size;       // Memory size
-    CPUState cpu;
-    Task tasks[MAX_TASKS];
-    Process processes[MAX_TASKS];
-    uint8_t current_task;
-    uint32_t next_pid;
-    Syscall syscall;
+    uint8_t *memory;        
+    size_t size;            
     uint32_t dir_stack[MAX_DIR_DEPTH];
     uint8_t dir_stack_ptr;
-    uint32_t total_file_bytes;  // File memory usage counter
+    uint32_t total_file_bytes; 
+    ExecContext exec_ctx;   
 } Microcontroller;
 
 // Function prototypes
-void init_cpu(CPUState *cpu, uint32_t stack_top);
-int execute_instruction(Microcontroller *mc);
-void handle_syscall(Microcontroller *mc);
 void get_current_directory_path(Microcontroller *mc, char *buffer, size_t buf_size);
 size_t calculate_min_metadata_memory();
-int load_elf_binary(Microcontroller *mc, const char *filename, uint32_t *entry_point);
-int execute_binary(Microcontroller *mc, const char *filename);
-void setup_stack(Microcontroller *mc, uint32_t stack_top, int argc, char **argv, char **envp);
+int load_elf(Microcontroller *mc, const char *filename);
+int execute_program(Microcontroller *mc);
+void handle_syscall(Microcontroller *mc, uint32_t syscall_num, uint32_t arg1, uint32_t arg2, uint32_t arg3);
+FileMetadata *find_file(Microcontroller *mc, const char *filename);
+int create_file(Microcontroller *mc, const char *filename, uint32_t size, uint8_t is_dir);
+int read_file_data(Microcontroller *mc, const char *filename, uint32_t offset, uint8_t *buffer, uint32_t len);
+int write_file_data(Microcontroller *mc, const char *filename, uint32_t offset, uint8_t *data, uint32_t len);
 
 // Create microcontroller
 Microcontroller *create_microcontroller(size_t mem_size) {
     Microcontroller *mc = malloc(sizeof(Microcontroller));
     if (!mc) return NULL;
 
-    mc->memory = calloc(1, mem_size); // Zero initialization
+    mc->memory = calloc(1, mem_size);
     if (!mc->memory) {
         free(mc);
         return NULL;
@@ -159,34 +63,32 @@ Microcontroller *create_microcontroller(size_t mem_size) {
 
     mc->size = mem_size;
     mc->dir_stack_ptr = 0;
-    mc->dir_stack[0] = 0; // Root directory
+    mc->dir_stack[0] = 0;
     mc->total_file_bytes = 0;
-    mc->current_task = 0;
-    mc->next_pid = 1;
 
-    // Initialize tasks
-    for (int i = 0; i < MAX_TASKS; i++) {
-        mc->tasks[i].active = 0;
-        mc->processes[i].pid = 0;
-    }
+    mc->exec_ctx.entry_point = 0;
+    mc->exec_ctx.phdr_offset = 0;
+    mc->exec_ctx.phnum = 0;
+    mc->exec_ctx.is_loaded = 0;
 
-    // Initialize CPU
-    init_cpu(&mc->cpu, mem_size - 4);
-    
-    // Initialize filesystem
     uint32_t metadata_area_size = MAX_FILES * sizeof(FileMetadata);
     uint32_t data_start = DATA_START + metadata_area_size;
+
     *((uint32_t *)(mc->memory + METADATA_START)) = data_start;
-    
-    // Create root directory
+
     FileMetadata *root = (FileMetadata *)(mc->memory + DATA_START);
     strncpy(root->name, "/", MAX_FILENAME_LEN);
-    root->start = 0;        // Root ID = 0
+    root->start = 0;
     root->size = 0;
     root->used = 1;
     root->is_dir = 1;
-    root->parent = 0;       // Root has no parent
-    root->executable = 0;
+    root->parent = 0;
+
+    create_file(mc, "stdin", 0, 0);
+    create_file(mc, "stdout", 0, 0);
+    create_file(mc, "stderr", 0, 0);
+    create_file(mc, "syscall_output.txt", 0, 0);
+    create_file(mc, "syscall_input.txt", 0, 0);
 
     return mc;
 }
@@ -198,6 +100,251 @@ void destroy_microcontroller(Microcontroller *mc) {
         free(mc);
     }
 }
+
+int load_elf(Microcontroller *mc, const char *filename) {
+    FileMetadata *meta = find_file(mc, filename);
+    if (!meta || meta->is_dir) {
+        printf("File not found or is directory\n");
+        return -1;
+    }
+
+    Elf32_Ehdr ehdr;
+    if (read_file_data(mc, filename, 0, (uint8_t*)&ehdr, sizeof(ehdr)) < 0) {
+        printf("Failed to read ELF header\n");
+        return -1;
+    }
+
+    if (memcmp(ehdr.e_ident, ELFMAG, SELFMAG) != 0) {
+        printf("Invalid ELF signature\n");
+        return -1;
+    }
+
+    if (ehdr.e_machine != EM_386) {
+        printf("Unsupported architecture: %d\n", ehdr.e_machine);
+        return -1;
+    }
+
+    mc->exec_ctx.entry_point = ehdr.e_entry;
+    mc->exec_ctx.phdr_offset = ehdr.e_phoff;
+    mc->exec_ctx.phnum = ehdr.e_phnum;
+    mc->exec_ctx.is_loaded = 1;
+
+    for (int i = 0; i < ehdr.e_phnum; i++) {
+        Elf32_Phdr phdr;
+        uint32_t offset = ehdr.e_phoff + i * sizeof(Elf32_Phdr);
+
+        if (read_file_data(mc, filename, offset, (uint8_t*)&phdr, sizeof(phdr)) < 0) {
+            printf("Failed to read program header %d\n", i);
+            return -1;
+        }
+
+        if (phdr.p_type == PT_LOAD) {
+            if (phdr.p_vaddr + phdr.p_memsz > mc->size) {
+                printf("Not enough memory for segment %d\n", i);
+                return -1;
+            }
+
+            uint8_t *seg_data = malloc(phdr.p_filesz);
+            if (!seg_data) {
+                printf("Memory allocation failed\n");
+                return -1;
+            }
+
+            if (read_file_data(mc, filename, phdr.p_offset, seg_data, phdr.p_filesz) < 0) {
+                printf("Failed to read segment data\n");
+                free(seg_data);
+                return -1;
+            }
+
+            memcpy(mc->memory + phdr.p_vaddr, seg_data, phdr.p_filesz);
+            free(seg_data);
+
+            if (phdr.p_memsz > phdr.p_filesz) {
+                memset(mc->memory + phdr.p_vaddr + phdr.p_filesz, 
+                       0, phdr.p_memsz - phdr.p_filesz);
+            }
+        }
+    }
+
+    printf("ELF loaded successfully. Entry point: 0x%x\n", ehdr.e_entry);
+    return 0;
+}
+
+// ================================
+// Program Execution
+// ================================
+
+int execute_program(Microcontroller *mc) {
+    if (!mc->exec_ctx.is_loaded) {
+        printf("No program loaded\n");
+        return -1;
+    }
+
+    printf("Starting program execution...\n");
+
+    handle_syscall(mc, 1, 0, 0, 0); // write(1, "Hello from VM!\n", 15)
+    
+    printf("Program finished\n");
+    return 0;
+}
+
+// ================================
+// Syscall Handling
+// ================================
+
+void handle_syscall(Microcontroller *mc, uint32_t syscall_num, 
+                   uint32_t arg1, uint32_t arg2, uint32_t arg3) {
+    switch (syscall_num) {
+        // write
+        case 1: {
+            int fd = arg1;
+            char *buf = (char*)(mc->memory + arg2);
+            size_t count = arg3;
+            
+            if (fd == 1 || fd == 2) { // stdout/stderr
+                for (size_t i = 0; i < count; i++) {
+                    putchar(buf[i]);
+                }
+                fflush(stdout);
+            } else {
+                const char *filename = "syscall_output.txt";
+                FileMetadata *meta = find_file(mc, filename);
+                if (!meta) {
+                    create_file(mc, filename, 0, 0);
+                    meta = find_file(mc, filename);
+                }
+                
+                if (meta) {
+                    write_file_data(mc, filename, meta->size, (uint8_t*)buf, count);
+                }
+            }
+            break;
+        }
+        
+        // read
+        case 3: {
+            int fd = arg1;
+            char *buf = (char*)(mc->memory + arg2);
+            size_t count = arg3;
+            
+            if (fd == 0) { // stdin
+                const char *msg = "Syscall read not implemented\n";
+                memcpy(buf, msg, strlen(msg));
+            } else {
+                const char *filename = "syscall_input.txt";
+                FileMetadata *meta = find_file(mc, filename);
+                if (meta) {
+                    read_file_data(mc, filename, 0, (uint8_t*)buf, 
+                                 count > meta->size ? meta->size : count);
+                }
+            }
+            break;
+        }
+        
+        case 5: {
+            const char *filename = (const char*)(mc->memory + arg1);
+
+            *(int*)(mc->memory + arg3) = 100;
+            break;
+        }
+
+        case 6: {
+            break;
+        }
+        case 45: {
+            *(uint32_t*)(mc->memory + arg1) = mc->size;
+            break;
+        }
+        
+        default:
+            printf("Unsupported syscall: %d\n", syscall_num);
+    }
+}
+
+// ================================
+// Snapshot Functions
+// ================================
+
+// save vm stat to file
+int save_snapshot(Microcontroller *mc, const char *filename) {
+    FILE *f = fopen(filename, "wb");
+    if (!f) {
+        perror("Error opening file");
+        return -1;
+    }
+
+    if (fwrite(&mc->size, sizeof(size_t), 1, f) != 1) goto write_error;
+
+    if (fwrite(mc->memory, 1, mc->size, f) != mc->size) goto write_error;
+
+    if (fwrite(mc->dir_stack, sizeof(uint32_t), MAX_DIR_DEPTH, f) != MAX_DIR_DEPTH) goto write_error;
+
+    if (fwrite(&mc->dir_stack_ptr, sizeof(uint8_t), 1, f) != 1) goto write_error;
+
+    if (fwrite(&mc->total_file_bytes, sizeof(uint32_t), 1, f) != 1) goto write_error;
+    
+    fclose(f);
+    return 0;
+
+write_error:
+    perror("Write error");
+    fclose(f);
+    return -1;
+}
+
+// load vm
+int restore_snapshot(Microcontroller *mc, const char *filename) {
+    FILE *f = fopen(filename, "rb");
+    if (!f) {
+        perror("Error opening file");
+        return -1;
+    }
+
+    size_t new_size;
+    if (fread(&new_size, sizeof(size_t), 1, f) != 1) goto read_error;
+    
+    size_t min_size = calculate_min_metadata_memory();
+    if (new_size < min_size) {
+        printf("Error: Snapshot memory size too small (%zu < %zu)\n", new_size, min_size);
+        fclose(f);
+        return -1;
+    }
+
+    uint8_t *new_memory = malloc(new_size);
+    if (!new_memory) {
+        perror("Memory allocation failed");
+        fclose(f);
+        return -1;
+    }
+
+    if (fread(new_memory, 1, new_size, f) != new_size) goto read_error;
+
+    uint32_t new_dir_stack[MAX_DIR_DEPTH];
+    if (fread(new_dir_stack, sizeof(uint32_t), MAX_DIR_DEPTH, f) != MAX_DIR_DEPTH) goto read_error;
+
+    uint8_t new_dir_stack_ptr;
+    if (fread(&new_dir_stack_ptr, sizeof(uint8_t), 1, f) != 1) goto read_error;
+
+    uint32_t new_total_file_bytes;
+    if (fread(&new_total_file_bytes, sizeof(uint32_t), 1, f) != 1) goto read_error;
+
+    free(mc->memory);
+    mc->memory = new_memory;
+    mc->size = new_size;
+    memcpy(mc->dir_stack, new_dir_stack, sizeof(uint32_t) * MAX_DIR_DEPTH);
+    mc->dir_stack_ptr = new_dir_stack_ptr;
+    mc->total_file_bytes = new_total_file_bytes;
+
+    fclose(f);
+    return 0;
+
+read_error:
+    perror("Read error");
+    fclose(f);
+    free(new_memory);
+    return -1;
+}
+
 
 const char* bytes_to_human_readable(size_t bytes) {
     static char buffer[32];
@@ -231,20 +378,8 @@ size_t calculate_min_metadata_memory() {
     // File metadata structures
     total += MAX_FILES * sizeof(FileMetadata);
     
-    // CPU state structure
-    total += sizeof(CPUState);
-    
-    // Task structures
-    total += MAX_TASKS * sizeof(Task);
-    
-    // Process structures
-    total += MAX_TASKS * sizeof(Process);
-    
     // Directory stack
     total += MAX_DIR_DEPTH * sizeof(uint32_t);
-    
-    // System call structure
-    total += sizeof(Syscall);
     
     // Other small variables
     total += sizeof(uint8_t) * 2 + sizeof(uint32_t) * 3;
@@ -267,16 +402,7 @@ void microcontroller_memory_manager_realloc_show_menu(size_t memory_size) {
 void microcontroller_memory_manager_realloc_set(Microcontroller *mc) {
     uint32_t free_ptr = *((uint32_t *)(mc->memory + METADATA_START));
     uint32_t metadata_size = DATA_START + MAX_FILES * sizeof(FileMetadata);
-    uint32_t stack_usage = 0;
-    
-    // Calculate stack usage
-    for (int i = 0; i < MAX_TASKS; i++) {
-        if (mc->tasks[i].active) {
-            stack_usage += mc->tasks[i].stack_size;
-        }
-    }
-    
-    uint32_t active_used = metadata_size + mc->total_file_bytes + stack_usage;
+    uint32_t active_used = metadata_size + mc->total_file_bytes;
     uint32_t free_space = mc->size - free_ptr;
 
     char input[1024];
@@ -406,24 +532,15 @@ void microcontroller_memory_manager_show_main_menu() {
 void microcontroller_memory_manager_info_menu(Microcontroller *mc) {
     uint32_t free_ptr = *((uint32_t *)(mc->memory + METADATA_START));
     uint32_t metadata_size = DATA_START + MAX_FILES * sizeof(FileMetadata);
-    uint32_t stack_usage = 0;
-    
-    // Calculate stack usage
-    for (int i = 0; i < MAX_TASKS; i++) {
-        if (mc->tasks[i].active) {
-            stack_usage += mc->tasks[i].stack_size;
-        }
-    }
-    
-    uint32_t active_used = metadata_size + mc->total_file_bytes + stack_usage;
+    uint32_t active_used = metadata_size + mc->total_file_bytes;
     uint32_t free_space = mc->size - free_ptr;
     float usage_percent = (active_used * 100.0) / mc->size;
     
     printf("===============Memory information===============\n");
     printf("  Total memory:      %10zu bytes\n", mc->size);
+    printf("  Total memory:      %s\n", bytes_to_human_readable(mc->size));
     printf("  Metadata:          %10u bytes\n", metadata_size);
     printf("  File data:         %10u bytes\n", mc->total_file_bytes);
-    printf("  Task stacks:       %10u bytes\n", stack_usage);
     printf("  Total used:        %10u bytes\n", active_used);
     printf("  Allocated:         %10u bytes\n", free_ptr);
     printf("  Free:              %10u bytes\n", free_space);
@@ -559,7 +676,6 @@ int create_file(Microcontroller *mc, const char *filename, uint32_t size, uint8_
             meta->used = 1;
             meta->is_dir = is_dir;
             meta->parent = current_dir;
-            meta->executable = 0;
             
             if (!is_dir) {
                 *((uint32_t *)(mc->memory + METADATA_START)) = free_ptr + size;
@@ -585,18 +701,6 @@ int write_file_data(Microcontroller *mc, const char *filename, uint32_t offset, 
         write_byte(mc, meta->start + offset + j, data[j]);
     }
     return 0;
-}
-
-// Write instruction to file
-void write_instruction(Microcontroller *mc, const char *filename, uint32_t offset, 
-                      uint8_t opcode, uint8_t reg1, uint8_t reg2, uint8_t reg3, uint16_t imm) {
-    uint8_t instruction[4];
-    instruction[0] = opcode;
-    instruction[1] = (reg1 << 4) | (reg2 & 0x0F);
-    instruction[2] = (reg3 << 4) | ((imm >> 8) & 0x0F);
-    instruction[3] = imm & 0xFF;
-    
-    write_file_data(mc, filename, offset, instruction, 4);
 }
 
 // Read data from file
@@ -643,12 +747,11 @@ void list_files(Microcontroller *mc) {
     for (int i = 0; i < MAX_FILES; i++) {
         FileMetadata *meta = get_metadata_slot(mc, i);
         if (meta && meta->used && meta->parent == current_dir) {
-            printf("  %s%-20s %-9s %u bytes %s\n", 
+            printf("  %s%-20s %-9s %u bytes\n", 
                    meta->is_dir ? "[D] " : "[F] ",
                    meta->name, 
                    meta->is_dir ? "DIR" : "FILE",
-                   meta->size,
-                   meta->executable ? "[X]" : "");
+                   meta->size);
             count++;
         }
     }
@@ -682,129 +785,6 @@ int change_directory(Microcontroller *mc, const char *dirname) {
         return 0;
     }
     return -1;
-}
-
-// Write bits to file
-int write_bits_to_file(Microcontroller *mc, const char *filename, uint32_t bit_offset, uint8_t *bits, uint32_t bit_count) {
-    FileMetadata *meta = find_file(mc, filename);
-    if (!meta || meta->is_dir) return -1;
-
-    uint32_t byte_offset = bit_offset / 8;
-    uint8_t bit_shift = bit_offset % 8;
-    
-    if (byte_offset >= meta->size) return -1;
-
-    uint8_t current_byte = read_byte(mc, meta->start + byte_offset);
-    
-    for (uint32_t i = 0; i < bit_count; i++) {
-        if (bits[i/8] & (1 << (i%8))) {
-            current_byte |= (1 << bit_shift);
-        } else {
-            current_byte &= ~(1 << bit_shift);
-        }
-        
-        bit_shift++;
-        if (bit_shift >= 8) {
-            write_byte(mc, meta->start + byte_offset, current_byte);
-            byte_offset++;
-            if (byte_offset >= meta->size) return -1;
-            current_byte = read_byte(mc, meta->start + byte_offset);
-            bit_shift = 0;
-        }
-    }
-
-    if (bit_shift != 0) {
-        write_byte(mc, meta->start + byte_offset, current_byte);
-    }
-    
-    return 0;
-}
-
-// Create task
-int create_task(Microcontroller *mc, const char *filename, uint8_t priority) {
-    FileMetadata *meta = find_file(mc, filename);
-    if (!meta || meta->is_dir) return -1;
-    
-    // Find free task slot
-    for (int i = 1; i < MAX_TASKS; i++) { // Slot 0 is main thread
-        if (!mc->tasks[i].active) {
-            uint32_t free_ptr = *((uint32_t *)(mc->memory + METADATA_START));
-            if (free_ptr + STACK_SIZE > mc->size) {
-                return -1;
-            }
-            
-            // Initialize task
-            Task *task = &mc->tasks[i];
-            task->active = 1;
-            task->priority = priority;
-            task->pid = mc->next_pid++;
-            task->ppid = mc->current_task == 0 ? 0 : mc->tasks[mc->current_task].pid;
-            
-            // Allocate stack
-            task->stack_start = free_ptr;
-            task->stack_size = STACK_SIZE;
-            *((uint32_t *)(mc->memory + METADATA_START)) = free_ptr + STACK_SIZE;
-            
-            // Initialize CPU state
-            init_cpu(&task->cpu, task->stack_start + STACK_SIZE - 4);
-            task->cpu.pc = meta->start;
-            
-            // Initialize stack with zeros
-            memset(mc->memory + free_ptr, 0, STACK_SIZE);
-            
-            // Add to process table
-            mc->processes[i].pid = task->pid;
-            mc->processes[i].status = 0; // Running
-            mc->processes[i].task = task;
-            
-            return i;
-        }
-    }
-    return -1;
-}
-
-// Task scheduler
-void scheduler(Microcontroller *mc) {
-    // Simple round-robin scheduler
-    static uint8_t last_task = 0;
-    
-    for (int i = 1; i <= MAX_TASKS; i++) {
-        uint8_t idx = (last_task + i) % MAX_TASKS;
-        if (idx != 0 && mc->tasks[idx].active) {
-            mc->current_task = idx;
-            last_task = idx;
-            return;
-        }
-    }
-    
-    // If no active tasks - use main thread
-    mc->current_task = 0;
-}
-
-// Execute current task
-void execute_current_task(Microcontroller *mc) {
-    if (mc->current_task == 0) {
-        // Main thread
-        for (int i = 0; i < 100; i++) {
-            if (!execute_instruction(mc)) break;
-        }
-    } else {
-        // Tasks
-        Task *task = &mc->tasks[mc->current_task];
-        CPUState saved_cpu = mc->cpu;
-        mc->cpu = task->cpu;
-        
-        for (int i = 0; i < 10; i++) {
-            if (!execute_instruction(mc)) {
-                task->active = 0;
-                mc->processes[mc->current_task].status = 1; // Zombie
-                break;
-            }
-        }
-        
-        task->cpu = mc->cpu;
-        mc->cpu = saved_cpu;
-    }
 }
 
 // Load external file
@@ -877,482 +857,7 @@ int load_external_file(Microcontroller *mc, const char *ext_path, const char *in
         return -1;
     }
     
-    // Mark as executable if it's a binary
-    if (strstr(ext_path, ".bin") || strstr(ext_path, ".elf")) {
-        FileMetadata *meta = find_file(mc, int_name);
-        if (meta) {
-            meta->executable = 1;
-        }
-    }
-    
     return 0;
-}
-
-// Setup stack for new process
-void setup_stack(Microcontroller *mc, uint32_t stack_top, int argc, char **argv, char **envp) {
-    uint32_t sp = stack_top;
-    
-    // Write argument count
-    sp -= 4;
-    *((uint32_t*)(mc->memory + sp)) = argc;
-    
-    // Write argument pointers
-    uint32_t argv_addr = sp - 4 * (argc + 1);
-    sp = argv_addr;
-    for (int i = 0; i < argc; i++) {
-        int len = strlen(argv[i]) + 1;
-        sp -= len;
-        memcpy(mc->memory + sp, argv[i], len);
-        *((uint32_t*)(mc->memory + argv_addr + i*4)) = sp;
-    }
-    *((uint32_t*)(mc->memory + argv_addr + argc*4)) = 0; // NULL terminator
-    
-    // Write environment pointers
-    uint32_t envp_addr = argv_addr - 4 * (MAX_ENVP + 1);
-    sp = envp_addr;
-    int env_count = 0;
-    for (int i = 0; envp[i] && i < MAX_ENVP; i++) {
-        int len = strlen(envp[i]) + 1;
-        sp -= len;
-        memcpy(mc->memory + sp, envp[i], len);
-        *((uint32_t*)(mc->memory + envp_addr + i*4)) = sp;
-        env_count++;
-    }
-    *((uint32_t*)(mc->memory + envp_addr + env_count*4)) = 0; // NULL terminator
-    
-    // Update CPU registers
-    mc->cpu.argc = argc;
-    mc->cpu.argv = argv_addr;
-    mc->cpu.envp = envp_addr;
-    mc->cpu.sp = sp;
-}
-
-// Load ELF binary
-int load_elf_binary(Microcontroller *mc, const char *filename, uint32_t *entry_point) {
-    FileMetadata *meta = find_file(mc, filename);
-    if (!meta || meta->is_dir) {
-        printf("File not found or is directory\n");
-        return -1;
-    }
-
-    Elf32_Ehdr ehdr;
-    if (read_file_data(mc, filename, 0, (uint8_t*)&ehdr, sizeof(ehdr))) {
-        printf("Failed to read ELF header\n");
-        return -1;
-    }
-
-    // Verify ELF magic
-    if (ehdr.e_ident[EI_MAG0] != ELFMAG0 ||
-        ehdr.e_ident[EI_MAG1] != ELFMAG1 ||
-        ehdr.e_ident[EI_MAG2] != ELFMAG2 ||
-        ehdr.e_ident[EI_MAG3] != ELFMAG3) {
-        printf("Invalid ELF magic\n");
-        return -1;
-    }
-    
-    // Check ELF class (32-bit)
-    if (ehdr.e_ident[EI_CLASS] != ELFCLASS32) {
-        printf("Not a 32-bit ELF file\n");
-        return -1;
-    }
-    
-    // Check data encoding (little-endian)
-    if (ehdr.e_ident[EI_DATA] != ELFDATA2LSB) {
-        printf("Not a little-endian ELF file\n");
-        return -1;
-    }
-    
-    // Check type (executable)
-    if (ehdr.e_type != ET_EXEC) {
-        printf("Not an executable ELF file\n");
-        return -1;
-    }
-    
-    // Check machine type (our custom CPU)
-    if (ehdr.e_machine != EM_CUSTOM) {
-        printf("Unsupported machine type: 0x%04X\n", ehdr.e_machine);
-        return -1;
-    }
-
-    // Read program headers
-    for (int i = 0; i < ehdr.e_phnum; i++) {
-        Elf32_Phdr phdr;
-        uint32_t phdr_offset = ehdr.e_phoff + i * ehdr.e_phentsize;
-        if (read_file_data(mc, filename, phdr_offset, (uint8_t*)&phdr, sizeof(phdr))) {
-            printf("Failed to read program header %d\n", i);
-            return -1;
-        }
-
-        if (phdr.p_type == PT_LOAD) {
-            // Check memory bounds
-            if (phdr.p_vaddr + phdr.p_memsz > mc->size) {
-                printf("Segment %d out of memory bounds\n", i);
-                return -1;
-            }
-
-            // Read segment data
-            for (uint32_t off = 0; off < phdr.p_filesz; off++) {
-                uint8_t byte;
-                if (read_file_data(mc, filename, phdr.p_offset + off, &byte, 1)) {
-                    printf("Failed to read segment data %d at offset %u\n", i, off);
-                    return -1;
-                }
-                write_byte(mc, phdr.p_vaddr + off, byte);
-            }
-
-            // Zero out remaining part of the segment in memory
-            for (uint32_t off = phdr.p_filesz; off < phdr.p_memsz; off++) {
-                write_byte(mc, phdr.p_vaddr + off, 0);
-            }
-        }
-    }
-
-    *entry_point = ehdr.e_entry;
-    return 0;
-}
-
-// Execute binary program
-int execute_binary(Microcontroller *mc, const char *filename) {
-    uint32_t entry_point;
-    
-    // Load ELF binary
-    if (load_elf_binary(mc, filename, &entry_point) != 0) {
-        printf("Failed to load ELF binary: %s\n", filename);
-        return -1;
-    }
-    
-    // Set up stack
-    char *argv[] = { (char*)filename, NULL };
-    char *envp[] = { "PATH=/bin", "HOME=/", NULL };
-    setup_stack(mc, mc->size - 4, 1, argv, envp);
-    
-    // Save current CPU state
-    CPUState saved_cpu = mc->cpu;
-    
-    // Set program counter to entry point
-    mc->cpu.pc = entry_point;
-    
-    // Execute until HALT
-    while (execute_instruction(mc)) {}
-    
-    // Restore CPU state
-    mc->cpu = saved_cpu;
-    
-    return 0;
-}
-
-// ================================
-// CPU Implementation
-// ================================
-
-// Initialize CPU
-void init_cpu(CPUState *cpu, uint32_t stack_top) {
-    memset(cpu, 0, sizeof(CPUState));
-    cpu->sp = stack_top;  // Set to top of stack
-}
-
-// Handle system calls
-void handle_syscall(Microcontroller *mc) {
-    Syscall *sc = &mc->syscall;
-    sc->return_value = 0;
-    
-    switch(sc->syscall_num) {
-        case 0: // Exit
-            if (mc->current_task != 0) {
-                mc->tasks[mc->current_task].active = 0;
-                mc->processes[mc->current_task].status = 1; // Zombie
-            }
-            break;
-            
-        case 1: // Fork
-            // Simple fork implementation - just return 0 for child, PID for parent
-            if (mc->current_task == 0) {
-                sc->return_value = -1; // Can't fork main thread
-            } else {
-                int new_task = create_task(mc, "forked", mc->tasks[mc->current_task].priority);
-                if (new_task > 0) {
-                    // Copy CPU state to child
-                    mc->tasks[new_task].cpu = mc->tasks[mc->current_task].cpu;
-                    sc->return_value = mc->tasks[new_task].pid; // Return child PID to parent
-                    mc->tasks[new_task].cpu.regs[0] = 0; // Return 0 to child
-                } else {
-                    sc->return_value = -1;
-                }
-            }
-            break;
-            
-        case 2: // Read file
-        {
-            char filename[MAX_PATH_LEN + 1];
-            uint32_t addr = sc->arg1;
-            int i = 0;
-            for (; i < MAX_PATH_LEN; i++) {
-                uint8_t c = read_byte(mc, addr++);
-                if (!c) break;
-                filename[i] = c;
-            }
-            filename[i] = 0;
-            
-            uint32_t offset = sc->arg2;
-            uint8_t *buffer = mc->memory + sc->arg3;
-            uint32_t len = sc->arg4;
-            
-            if (read_file_data(mc, filename, offset, buffer, len) == 0) {
-                sc->return_value = len;
-            } else {
-                sc->return_value = -1;
-            }
-            break;
-        }
-            
-        case 3: // Write to file
-        {
-            char filename[MAX_PATH_LEN + 1];
-            uint32_t addr = sc->arg1;
-            int i = 0;
-            for (; i < MAX_PATH_LEN; i++) {
-                uint8_t c = read_byte(mc, addr++);
-                if (!c) break;
-                filename[i] = c;
-            }
-            filename[i] = 0;
-            
-            uint32_t offset = sc->arg2;
-            uint8_t *data = mc->memory + sc->arg3;
-            uint32_t len = sc->arg4;
-            
-            if (write_file_data(mc, filename, offset, data, len) == 0) {
-                sc->return_value = len;
-            } else {
-                sc->return_value = -1;
-            }
-            break;
-        }
-            
-        case 4: // Create file
-        {
-            char filename[MAX_PATH_LEN + 1];
-            uint32_t addr = sc->arg1;
-            int i = 0;
-            for (; i < MAX_PATH_LEN; i++) {
-                uint8_t c = read_byte(mc, addr++);
-                if (!c) break;
-                filename[i] = c;
-            }
-            filename[i] = 0;
-            
-            uint32_t size = sc->arg2;
-            
-            if (create_file(mc, filename, size, 0) >= 0) {
-                sc->return_value = 0;
-            } else {
-                sc->return_value = -1;
-            }
-            break;
-        }
-        case 5: // Write bits to file
-        {
-            char filename[MAX_PATH_LEN + 1];
-            uint32_t addr = sc->arg1;
-            int i = 0;
-            for (; i < MAX_PATH_LEN; i++) {
-                uint8_t c = read_byte(mc, addr++);
-                if (!c) break;
-                filename[i] = c;
-            }
-            filename[i] = 0;
-            
-            uint32_t bit_offset = sc->arg2;
-            uint8_t *bits = mc->memory + sc->arg3;
-            uint32_t bit_count = sc->arg4;
-            
-            if (write_bits_to_file(mc, filename, bit_offset, bits, bit_count) == 0) {
-                sc->return_value = bit_count;
-            } else {
-                sc->return_value = -1;
-            }
-            break;
-        }
-            
-        case 6: // Execute binary
-        {
-            char filename[MAX_PATH_LEN + 1];
-            uint32_t addr = sc->arg1;
-            int i = 0;
-            for (; i < MAX_PATH_LEN; i++) {
-                uint8_t c = read_byte(mc, addr++);
-                if (!c) break;
-                filename[i] = c;
-            }
-            filename[i] = 0;
-            
-            sc->return_value = execute_binary(mc, filename);
-            break;
-        }
-            
-        case 7: // Execve
-        {
-            char filename[MAX_PATH_LEN + 1];
-            uint32_t addr = sc->arg1;
-            int i = 0;
-            for (; i < MAX_PATH_LEN; i++) {
-                uint8_t c = read_byte(mc, addr++);
-                if (!c) break;
-                filename[i] = c;
-            }
-            filename[i] = 0;
-            
-            // For simplicity, we'll just execute the binary
-            sc->return_value = execute_binary(mc, filename);
-            break;
-        }
-            
-        case 8: // Waitpid
-            // Simple wait implementation - just return immediately
-            sc->return_value = 0;
-            break;
-            
-        case 0x10: // Print character
-            putchar(sc->arg1 & 0xFF);
-            fflush(stdout);
-            break;
-            
-        case 0x11: // Read character
-            sc->return_value = getchar();
-            break;
-            
-        default:
-            printf("Unknown syscall: %d\n", sc->syscall_num);
-    }
-    
-    mc->cpu.regs[0] = sc->return_value;
-}
-
-// Execute instruction
-int execute_instruction(Microcontroller *mc) {
-    // Check instruction address
-    if (mc->cpu.pc >= mc->size - 3) return 0;
-    
-    uint32_t instr = 0;
-    for (int i = 0; i < 4; i++) {
-        instr = (instr << 8) | read_byte(mc, mc->cpu.pc++);
-    }
-    
-    uint8_t opcode = (instr >> 24) & 0xFF;
-    uint8_t reg1 = (instr >> 20) & 0x0F;
-    uint8_t reg2 = (instr >> 16) & 0x0F;
-    uint8_t reg3 = (instr >> 12) & 0x0F;
-    uint16_t imm = instr & 0xFFFF;
-    int32_t simm = (int32_t)(int16_t)imm; // Sign extension
-    
-    switch(opcode) {
-        case 0x00: // NOP
-            break;
-            
-        case 0x01: // MOV Rdest, #imm
-            mc->cpu.regs[reg1] = imm;
-            break;
-            
-        case 0x02: // ADD Rd, Rs1, Rs2
-            mc->cpu.regs[reg1] = mc->cpu.regs[reg2] + mc->cpu.regs[reg3];
-            break;
-            
-        case 0x03: // SUB Rd, Rs1, Rs2
-            mc->cpu.regs[reg1] = mc->cpu.regs[reg2] - mc->cpu.regs[reg3];
-            break;
-            
-        case 0x04: // LOAD Rd, [Rs + off]
-            {
-                uint32_t addr = mc->cpu.regs[reg2] + imm;
-                if (addr > mc->size - 4) break;
-                mc->cpu.regs[reg1] = 0;
-                for (int i = 0; i < 4; i++) {
-                    mc->cpu.regs[reg1] |= read_byte(mc, addr + i) << (i * 8);
-                }
-            }
-            break;
-            
-        case 0x05: // STORE Rd, [Rs + off]
-            {
-                uint32_t addr = mc->cpu.regs[reg2] + imm;
-                if (addr > mc->size - 4) break;
-                uint32_t value = mc->cpu.regs[reg1];
-                for (int i = 0; i < 4; i++) {
-                    write_byte(mc, addr + i, (value >> (i * 8)) & 0xFF);
-                }
-            }
-            break;
-            
-        case 0x06: // JMP #imm
-            mc->cpu.pc += simm;
-            break;
-            
-        case 0x07: // JZ Rs, #imm
-            if (mc->cpu.regs[reg1] == 0) {
-                mc->cpu.pc += simm;
-            }
-            break;
-            
-        case 0x08: // PUSH Rs
-            {
-                uint32_t value = mc->cpu.regs[reg1];
-                if (mc->cpu.sp < 4) break;
-                mc->cpu.sp -= 4;
-                for (int i = 0; i < 4; i++) {
-                    write_byte(mc, mc->cpu.sp + i, (value >> (i * 8)) & 0xFF);
-                }
-                break;
-            }
-            
-        case 0x09: // POP Rd
-            {
-                if (mc->cpu.sp > mc->size - 4) break;
-                uint32_t value = 0;
-                for (int i = 0; i < 4; i++) {
-                    value |= read_byte(mc, mc->cpu.sp + i) << (i * 8);
-                }
-                mc->cpu.sp += 4;
-                mc->cpu.regs[reg1] = value;
-                break;
-            }
-
-        case 0x20: // Delay
-            usleep(mc->cpu.regs[0] * 1000);
-            break;
-            
-        case 0x0A: // System call
-            mc->syscall.syscall_num = mc->cpu.regs[0];
-            mc->syscall.arg1 = mc->cpu.regs[1];
-            mc->syscall.arg2 = mc->cpu.regs[2];
-            mc->syscall.arg3 = mc->cpu.regs[3];
-            mc->syscall.arg4 = mc->cpu.regs[4];
-            handle_syscall(mc);
-            break;
-            
-        case 0xFF: // Halt
-            return 0;
-            
-        case 0x0B: // Write bits
-            mc->syscall.syscall_num = 5; 
-            mc->syscall.arg1 = mc->cpu.regs[1];
-            mc->syscall.arg2 = mc->cpu.regs[2];
-            mc->syscall.arg3 = mc->cpu.regs[3];
-            mc->syscall.arg4 = mc->cpu.regs[4];
-            handle_syscall(mc);
-            break;
-            
-        case 0x0C: // Execute binary instruction
-            mc->syscall.syscall_num = 6;
-            mc->syscall.arg1 = mc->cpu.regs[1];
-            handle_syscall(mc);
-            break;
-            
-        default:
-            printf("ERROR: Unknown instruction: 0x%02X\n", opcode);
-            return 0;
-    }
-    
-    return 1;
 }
 
 // ================================
@@ -1374,46 +879,17 @@ void show_interface() {
     printf("|   write     - Write to file             |\n");
     printf("|   read      - Read file                 |\n");
     printf("|   rm        - Delete file               |\n");
-    printf("|   run       - Execute program           |\n");
-    printf("|   runbin    - Execute binary file       |\n");
-    printf("|   task      - Create task               |\n");
     printf("|   load      - Load external file        |\n");
+    printf("|   loadbin  - Load binary program        |\n");
+    printf("|   exec     - Execute loaded program     |\n");
+    printf("|   syscall  - Test syscall               |\n");
     printf("|   mem       - Memory information        |\n");
     printf("|   man       - Command manual            |\n");
     printf("|   clear     - clear screen              |\n");
+    printf("|   snapshot  - Save VM state             |\n");
+    printf("|   restore   - Restore VM state          |\n");
     printf("|   exit      - Exit                      |\n");
-    printf("|   makeprog  - Create test program       |\n");
-    printf("|   writeinst - Write instruction         |\n");
-    printf("|   chmod     - Set executable flag       |\n");
     printf("===========================================\n");
-}
-
-// Create test program
-void create_sample_program(Microcontroller *mc) {
-    if (create_file(mc, "test.bin", 256, 0) < 0) {
-        printf("Error creating program file\n");
-        return;
-    }
-
-    // MOV R0, #42
-    write_instruction(mc, "test.bin", 0, 0x01, 0, 0, 0, 0x2A);
-    // MOV R1, #15
-    write_instruction(mc, "test.bin", 4, 0x01, 1, 0, 0, 0x0F);
-    // ADD R2, R0, R1
-    write_instruction(mc, "test.bin", 8, 0x02, 2, 0, 1, 0x00);
-    // SYSCALL (print R0)
-    write_instruction(mc, "test.bin", 12, 0x0A, 0, 0, 0, 0x10);
-    // HALT
-    write_instruction(mc, "test.bin", 16, 0xFF, 0, 0, 0, 0x00);
-    
-    // Mark as executable
-    FileMetadata *meta = find_file(mc, "test.bin");
-    if (meta) {
-        meta->executable = 1;
-    }
-    
-    printf("Test program written to test.bin (20 bytes)\n");
-    printf("Execute: run test.bin\n");
 }
 
 // Show command manual
@@ -1450,28 +926,37 @@ void show_manual(const char *cmd) {
         printf("Usage: read <file> <offset> <length>\n");
         printf("Example: read hello.txt 0 11\n");
     }
+    else if (strcmp(cmd, "snapshot") == 0) {
+        printf("snapshot: Save VM state to file\n");
+        printf("Usage: snapshot <filename.mvms>\n");
+        printf("Example: snapshot backup.mvms\n");
+    }
+        if (strcmp(cmd, "loadbin") == 0) {
+        printf("loadbin: Load ELF binary for execution\n");
+        printf("Usage: loadbin <filename>\n");
+    }
+    else if (strcmp(cmd, "exec") == 0) {
+        printf("exec: Execute loaded binary program\n");
+        printf("Usage: exec\n");
+    }
+    else if (strcmp(cmd, "syscall") == 0) {
+        printf("syscall: Test syscall handling\n");
+        printf("Usage: syscall <num> <arg1> <arg2> <arg3>\n");
+    }
+    else if (strcmp(cmd, "restore") == 0) {
+        printf("restore: Restore VM state from file\n");
+        printf("Usage: restore <filename.mvms>\n");
+        printf("Example: restore backup.mvms\n");
+    }
     else if (strcmp(cmd, "rm") == 0) {
         printf("rm: Delete file or directory\n");
         printf("Usage: rm <filename>\n");
         printf("Note: Directory must be empty\n");
     }
-    else if (strcmp(cmd, "run") == 0) {
-        printf("run: Execute program\n");
-        printf("Usage: run <program_file>\n");
-    }
-    else if (strcmp(cmd, "runbin") == 0) {
-        printf("runbin: Execute ELF binary file\n");
-        printf("Usage: runbin <binary_file>\n");
-    }
-    else if (strcmp(cmd, "task") == 0) {
-        printf("task: Create new task\n");
-        printf("Usage: task <file> <priority>\n");
-        printf("Priority: 0 (lowest) to 255 (highest)\n");
-    }
     else if (strcmp(cmd, "load") == 0) {
         printf("load: Load external file into system\n");
         printf("Usage: load <external_path> <internal_name>\n");
-        printf("Example: load /home/user/program.bin app\n");
+        printf("Example: load /home/user/file.txt doc\n");
     }
     else if (strcmp(cmd, "mem") == 0) {
         printf("mem: Show memory usage\n");
@@ -1490,22 +975,9 @@ void show_manual(const char *cmd) {
         printf("exit: Exit system\n");
         printf("Usage: exit\n");
     }
-    else if (strcmp(cmd, "makeprog") == 0) {
-        printf("makeprog: Create test program\n");
-        printf("Usage: makeprog\n");
-    }
-    else if (strcmp(cmd, "writeinst") == 0) {
-        printf("writeinst: Write instruction to file\n");
-        printf("Usage: writeinst <file> <offset> <opcode_hex> <reg1> <reg2> <reg3> <imm>\n");
-        printf("Example: writeinst program.bin 0 01 0 0 0 42   # MOV R0, #42\n");
-    }
-    else if (strcmp(cmd, "chmod") == 0) {
-        printf("chmod: Set executable flag\n");
-        printf("Usage: chmod +x <filename>\n");
-    }
     else {
         printf("No manual for: %s\n", cmd);
-        printf("Available commands: ls, mkdir, cd, create, write, read, rm, run, runbin, task, load, mem, man, exit, makeprog, writeinst, chmod\n");
+        printf("Available commands: ls, mkdir, cd, create, write, read, rm, load, mem, man, clear, exit\n");
     }
 }
 
@@ -1532,9 +1004,6 @@ void process_command(Microcontroller *mc, const char *cmd_line) {
     const char *arg2 = argc > 2 ? tokens[2] : "";
     const char *arg3 = argc > 3 ? tokens[3] : "";
     const char *arg4 = argc > 4 ? tokens[4] : "";
-    const char *arg5 = argc > 5 ? tokens[5] : "";
-    const char *arg6 = argc > 6 ? tokens[6] : "";
-    const char *arg7 = argc > 7 ? tokens[7] : "";
     
     if (strcmp(command, "ls") == 0 || strcmp(command, "dir") == 0) {
         list_files(mc);
@@ -1549,11 +1018,48 @@ void process_command(Microcontroller *mc, const char *cmd_line) {
     else if (strcmp(command, "pwd") == 0) {
         show_current_directory(mc);
     }
+    if (strcmp(command, "loadbin") == 0 && argc >= 2) {
+        if (load_elf(mc, arg1) == 0) {
+            printf("Binary '%s' loaded\n", arg1);
+        } else {
+            printf("Failed to load binary\n");
+        }
+    }
+    else if (strcmp(command, "exec") == 0) {
+        if (execute_program(mc) == 0) {
+            printf("Program executed\n");
+        } else {
+            printf("Execution failed\n");
+        }
+    }
+    else if (strcmp(command, "syscall") == 0 && argc >= 5) {
+        uint32_t num = atoi(arg1);
+        uint32_t a1 = atoi(arg2);
+        uint32_t a2 = atoi(arg3);
+        uint32_t a3 = atoi(arg4);
+        
+        handle_syscall(mc, num, a1, a2, a3);
+        printf("Syscall %d executed\n", num);
+    }
     else if (strcmp(command, "cd") == 0 && argc >= 2) {
         if (change_directory(mc, arg1) == 0) {
             printf("Directory changed\n");
         } else {
             printf("Directory not found\n");
+        }
+    }
+    else if (strcmp(command, "snapshot") == 0 && argc >= 2) {
+        if (save_snapshot(mc, arg1) == 0) {
+            printf("Snapshot saved to '%s'\n", arg1);
+        } else {
+            printf("Failed to save snapshot\n");
+        }
+    }
+    else if (strcmp(command, "restore") == 0 && argc >= 2) {
+        if (restore_snapshot(mc, arg1) == 0) {
+            printf("Snapshot restored from '%s'\n", arg1);
+        } else {
+            printf("Failed to restore snapshot\n");
         }
     }
     else if (strcmp(command, "create") == 0 && argc >= 3) {
@@ -1603,39 +1109,6 @@ void process_command(Microcontroller *mc, const char *cmd_line) {
             printf("Delete error\n");
         }
     }
-    else if (strcmp(command, "run") == 0 && argc >= 2) {
-        FileMetadata *meta = find_file(mc, arg1);
-        if (meta && !meta->is_dir) {
-            CPUState saved_cpu = mc->cpu;
-            mc->cpu.pc = meta->start;
-            
-            while (execute_instruction(mc)) {
-                // Execute until HALT
-            }
-            
-            mc->cpu = saved_cpu;
-            printf("Program finished\n");
-        } else {
-            printf("Program not found\n");
-        }
-    }
-    else if (strcmp(command, "runbin") == 0 && argc >= 2) {
-        if (execute_binary(mc, arg1) == 0) {
-            printf("Binary execution finished\n");
-        } else {
-            printf("Error executing binary\n");
-        }
-    }
-    else if (strcmp(command, "task") == 0 && argc >= 3) {
-        uint8_t priority = atoi(arg2);
-        int task_id = create_task(mc, arg1, priority);
-        if (task_id >= 0) {
-            printf("Task created (ID: %d)\n", task_id);
-        } else {
-            printf("Error creating task\n");
-        }
-    }
-    
     else if (strcmp(command, "load") == 0) {
         if (argc < 3) {
             printf("Usage: load <external_path> <internal_name>\n");
@@ -1654,38 +1127,12 @@ void process_command(Microcontroller *mc, const char *cmd_line) {
     else if (strcmp(command, "clear") == 0) {
         printf("\033[2J\033[H");
     }
-    else if (strcmp(command, "makeprog") == 0) {
-        create_sample_program(mc);
-    }
-    else if (strcmp(command, "writeinst") == 0 && argc >= 8) {
-        uint32_t offset = atoi(arg2);
-        uint8_t opcode = (uint8_t)strtoul(arg3, NULL, 16);  // HEX format
-        uint8_t reg1 = (uint8_t)atoi(arg4);
-        uint8_t reg2 = (uint8_t)atoi(arg5);
-        uint8_t reg3 = (uint8_t)atoi(arg6);
-        uint16_t imm = (uint16_t)atoi(arg7);
-        
-        write_instruction(mc, arg1, offset, opcode, reg1, reg2, reg3, imm);
-        printf("Instruction written to %s at offset %u\n", arg1, offset);
-    }
-    else if (strcmp(command, "chmod") == 0 && argc >= 3) {
-        if (strcmp(arg1, "+x") == 0) {
-            FileMetadata *meta = find_file(mc, arg2);
-            if (meta) {
-                meta->executable = 1;
-                printf("File '%s' marked as executable\n", arg2);
-            } else {
-                printf("File not found\n");
-            }
-        } else {
-            printf("Usage: chmod +x <filename>\n");
-        }
-    }
     else if (strcmp(command, "man") == 0 && argc >= 2) {
         show_manual(arg1);
     }
     else if (strcmp(command, "exit") == 0) {
         printf("Exiting...\n");
+        printf("\033[2J\033[H");
         exit(0);
     }
     else if (strcmp(command, "help") == 0) {
@@ -1704,34 +1151,56 @@ int main() {
     size_t memory_size = 0;
     char input[1024];
 
-    printf("================================================================\n");
-    printf("| Microcontroller OS - Memory Configuration                    |\n");
-    printf("================================================================\n");
-    printf("| Minimum required memory: %-8zu bytes (%s)          |\n", 
-           min_need_memory, bytes_to_human_readable(min_need_memory));
-    printf("| Default memory size:    %-8d bytes (%s)          |\n", 
-           DEFAULT_MEMORY_SIZE, bytes_to_human_readable(DEFAULT_MEMORY_SIZE));
-    printf("|                                                              |\n");
-    printf("| Enter memory size in bytes or press Enter for default:        |\n");
-    printf("================================================================\n");
-    
-    printf("memory_size> ");
-    if (!fgets(input, sizeof(input), stdin)) return 1;
-    input[strcspn(input, "\n")] = '\0';
-    
-    if (strlen(input) == 0) {
-        memory_size = DEFAULT_MEMORY_SIZE;
-    } else {
-        memory_size = atol(input);
-        if (memory_size < min_need_memory) {
-            printf("Error: Memory size must be at least %zu bytes\n", min_need_memory);
-            return 1;
+    while (1) {
+        printf("================================================================\n");
+        printf("| Microcontroller OS - Memory Configuration                    |\n");
+        printf("================================================================\n");
+        printf("| type 'exit' for cansel                                       |\n");
+        printf("| Minimum required memory: %-8zu bytes (%s)          |\n", 
+               min_need_memory, bytes_to_human_readable(min_need_memory));
+        printf("| Default memory size:    %-8d bytes (%s)          |\n", 
+               DEFAULT_MEMORY_SIZE, bytes_to_human_readable(DEFAULT_MEMORY_SIZE));
+        printf("|                                                              |\n");
+        printf("| Enter memory size in bytes or press Enter for default:        |\n");
+        printf("================================================================\n");
+        
+        printf("memory_size> ");
+        fgets(input, sizeof(input), stdin);
+        input[strcspn(input, "\n")] = '\0';
+        
+        if (strlen(input) == 0) {
+            memory_size = DEFAULT_MEMORY_SIZE;
+            break;
+        } 
+        
+        if (!strcmp(input, "exit")) {
+            printf("\033[2J\033[H");
+            return 0;
+        }
+        
+        if (!atoi(input)) {
+            printf("-----------------ERROR-----------------\n");
+            printf("type only nums for sellect memory size\n");
+            printf("---------------------------------------\n");
+            continue;
+        }
+        
+        else {
+            memory_size = atol(input);
+            if (memory_size < min_need_memory) {
+                printf("Error: Memory size must be at least %zu bytes\n", min_need_memory);
+                return 1;
+            }
+            break;
         }
     }
 
     Microcontroller *mcu = create_microcontroller(memory_size);
     if (!mcu) {
+        printf("ERROR ERROR ERROR ERROR ERROR ERROR ERROR ERROR\n");
         printf("Failed to initialize microcontroller!\n");
+        printf("ERROR ERROR ERROR ERROR ERROR ERROR ERROR ERROR\n");
+        printf("\033[2J\033[H");
         return 1;
     }
     
@@ -1744,15 +1213,11 @@ int main() {
         input[strcspn(input, "\n")] = '\0';
         
         if (strlen(input) > 0) {
-            if (strcmp(input, "run_tasks") == 0) {
-                scheduler(mcu);
-                execute_current_task(mcu);
-            } else {
-                process_command(mcu, input);
-            }
+            process_command(mcu, input);
         }
     }
 
+    printf("\033[2J\033[H");
     destroy_microcontroller(mcu);
     return 0;
 }
