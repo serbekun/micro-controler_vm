@@ -31,7 +31,7 @@ typedef struct {
 } ExecContext;
 
 typedef struct {
-    uint8_t *memory;        
+    uint8_t *memory;        // point to all vm memory
     size_t size;            
     uint32_t dir_stack[MAX_DIR_DEPTH];
     uint8_t dir_stack_ptr;
