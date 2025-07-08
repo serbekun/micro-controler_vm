@@ -8,6 +8,7 @@
 #define METADATA_START 0
 #define DEFAULT_MEMORY_SIZE (4 * 1024 * 1024)  // 4MB
 #define DATA_START (sizeof(uint32_t))
+// need for know howe many metadata need. m and don't use many steck
 #define MAX_FILES 32
 #define MAX_DIR_DEPTH 8
 #define MAX_FILENAME_LEN 32
