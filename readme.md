@@ -1,7 +1,7 @@
 # Microcontroller OS
 
 ## How was created code
-the code was written during training that's why it's so shitty.
+the code was written during training that's why it's so shitty and have not work places.
 
 ## Overview
 
