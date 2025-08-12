@@ -1,5 +1,8 @@
 # Microcontroller OS
 
+## How was created code
+the code was written during training that's why it's so shitty.
+
 ## Overview
 
 This project implements a **virtual microcontroller OS** in C that simulates a complete embedded system environment with:
