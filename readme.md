@@ -99,6 +99,7 @@ gcc -o mcu_os main.c
 
 The system will prompt for initial memory allocation (press Enter for default 4MB).
 Example Session
+
 bash
 
 mcuOS> mkdir test
@@ -123,14 +124,6 @@ Future Enhancements
     Improve error handling
 
     Add networking support
-
-License
-
-MIT License
-
-Author: [Mishchenko Sergey]
-text
-
 
 Key improvements from the previous version:
 1. Better organization of features
